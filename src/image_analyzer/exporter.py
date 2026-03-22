@@ -32,13 +32,16 @@ class CSVExporter:
     def __init__(
         self,
         output_folder: str,
+        renamed_images_folder: str = "",
         rename_images: bool = True,
         rename_pattern: str = "{entity_type}_{name}_{seq}_{date}.{ext}",
     ) -> None:
         self.output_folder = Path(output_folder)
+        self.renamed_images_folder = Path(renamed_images_folder) if renamed_images_folder else self.output_folder
         self._rename_images_flag = rename_images
         self.rename_pattern = rename_pattern
         self.output_folder.mkdir(parents=True, exist_ok=True)
+        self.renamed_images_folder.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
     # Public API
@@ -116,11 +119,11 @@ class CSVExporter:
 
                 # Build new filename and handle collisions
                 new_name = f"{etype}_{name}_{seq:03d}_{today}.{ext}"
-                dest = self.output_folder / new_name
+                dest = self.renamed_images_folder / new_name
                 while dest.exists():
                     seq += 1
                     new_name = f"{etype}_{name}_{seq:03d}_{today}.{ext}"
-                    dest = self.output_folder / new_name
+                    dest = self.renamed_images_folder / new_name
 
                 seq_counters[key] = seq + 1
                 shutil.copy2(str(src), str(dest))
@@ -223,6 +226,7 @@ class CSVExporter:
             row["flagged_for_review"] = primary.flagged_for_review
             row["review_reason"] = primary.review_reason or ""
             row["classification_reasoning"] = primary.classification.reasoning
+            row["related_to"] = primary.related_to or ""
             return row
 
         # Extract data fields from the typed extracted_data model
@@ -239,6 +243,9 @@ class CSVExporter:
                         data_dict.get("precautionary_statements") or []
                     )
             row.update(data_dict)
+
+        # Relationship to parent entity
+        row["related_to"] = primary.related_to or ""
 
         # Append common trailing columns
         row["image_paths"] = "; ".join(group.all_image_paths)

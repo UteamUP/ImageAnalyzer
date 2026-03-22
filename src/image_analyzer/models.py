@@ -133,7 +133,11 @@ class ExtractedChemicalData(BaseModel):
 
 
 class ImageAnalysisResult(BaseModel):
-    """Complete analysis result for a single image."""
+    """Complete analysis result for a single entity found in an image.
+
+    A single image may produce multiple ImageAnalysisResult objects when
+    multiple entities are detected (e.g., an asset with visible parts/tools).
+    """
 
     image_path: str
     original_filename: str
@@ -149,6 +153,8 @@ class ImageAnalysisResult(BaseModel):
     processed_at: datetime = Field(default_factory=datetime.now)
     # iPhone edit pairing
     paired_images: list[str] = Field(default_factory=list)
+    # Relationship: name of parent entity this item relates to (e.g., asset name)
+    related_to: Optional[str] = None
 
 
 class ImageGroup(BaseModel):
@@ -182,6 +188,7 @@ ASSET_CSV_COLUMNS = [
     "upc_number", "additional_info", "notes", "check_in_procedure", "check_out_procedure",
     "icon_name", "suggested_vendor", "suggested_category", "suggested_location",
     "manufacturer_brand", "visible_condition", "is_vehicle", "vehicle_type", "license_plate",
+    "related_to",
     "image_paths", "original_filenames", "confidence_score", "flagged_for_review", "review_reason",
 ]
 
@@ -189,14 +196,14 @@ TOOL_CSV_COLUMNS = [
     "name", "description", "width", "height", "length", "depth", "weight", "value",
     "barcode_number", "serial_number", "reference_number", "model_number", "tool_number",
     "additional_info", "notes", "suggested_vendor", "suggested_category",
-    "manufacturer_brand",
+    "manufacturer_brand", "related_to",
     "image_paths", "original_filenames", "confidence_score", "flagged_for_review", "review_reason",
 ]
 
 PART_CSV_COLUMNS = [
     "name", "description", "serial_number", "reference_number", "model_number",
     "part_number", "additional_info", "notes", "value",
-    "suggested_vendor", "suggested_category", "manufacturer_brand",
+    "suggested_vendor", "suggested_category", "manufacturer_brand", "related_to",
     "image_paths", "original_filenames", "confidence_score", "flagged_for_review", "review_reason",
 ]
 
@@ -208,13 +215,13 @@ CHEMICAL_CSV_COLUMNS = [
     "respiratory_protection", "hand_protection", "eye_protection", "skin_protection",
     "first_aid_measures", "firefighting_measures", "spill_leak_procedures", "disposal_considerations",
     "unit_of_measure", "hazard_statements", "precautionary_statements",
-    "manufacturer_name", "suggested_vendor", "suggested_category",
+    "manufacturer_name", "suggested_vendor", "suggested_category", "related_to",
     "image_paths", "original_filenames", "confidence_score", "flagged_for_review", "review_reason",
 ]
 
 UNCLASSIFIED_CSV_COLUMNS = [
     "original_filename", "image_path", "confidence_score",
-    "flagged_for_review", "review_reason", "classification_reasoning",
+    "flagged_for_review", "review_reason", "classification_reasoning", "related_to",
 ]
 
 CSV_COLUMNS_BY_TYPE = {

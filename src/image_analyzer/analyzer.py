@@ -69,15 +69,18 @@ class GeminiAnalyzer:
             rpm=config.requests_per_minute,
         )
 
-    def analyze_image(self, image_path: str, image_bytes: bytes) -> ImageAnalysisResult:
+    def analyze_image(self, image_path: str, image_bytes: bytes) -> list[ImageAnalysisResult]:
         """Send an image to Gemini for classification and data extraction.
+
+        A single image may contain multiple entities (e.g., an asset with
+        visible parts, tools, or chemicals). Returns one result per entity.
 
         Args:
             image_path: Path to the image file (for metadata in the result).
             image_bytes: Raw image bytes to send to Gemini.
 
         Returns:
-            ImageAnalysisResult with classification and extracted data.
+            List of ImageAnalysisResult, one per entity found in the image.
         """
         original_filename = Path(image_path).name
 
@@ -97,7 +100,7 @@ class GeminiAnalyzer:
                 image=original_filename,
                 error=str(exc),
             )
-            return ImageAnalysisResult(
+            return [ImageAnalysisResult(
                 image_path=image_path,
                 original_filename=original_filename,
                 file_hash_sha256="",
@@ -109,42 +112,28 @@ class GeminiAnalyzer:
                 extracted_data=None,
                 flagged_for_review=True,
                 review_reason=f"API error: {exc}",
-            )
+            )]
 
         # Parse the response
         response_text = response.text if hasattr(response, "text") else str(response)
-        classification, extracted_data = self._parse_response(response_text, image_path)
+        results = self._parse_multi_entity_response(response_text, image_path)
 
         # Track costs
         self._images_analyzed += 1
         self._total_input_tokens += _ESTIMATED_INPUT_TOKENS_PER_IMAGE + _ESTIMATED_PROMPT_TOKENS
         self._total_output_tokens += _ESTIMATED_OUTPUT_TOKENS
 
-        # Flag low confidence for review
-        flagged = classification.confidence < 0.5
-        review_reason = None
-        if flagged:
-            review_reason = f"Low confidence: {classification.confidence:.2f}"
+        for result in results:
+            logger.info(
+                "analyzer.result",
+                image=original_filename,
+                entity_type=result.classification.primary_type.value,
+                confidence=result.classification.confidence,
+                flagged=result.flagged_for_review,
+                related_to=result.related_to,
+            )
 
-        result = ImageAnalysisResult(
-            image_path=image_path,
-            original_filename=original_filename,
-            file_hash_sha256="",
-            classification=classification,
-            extracted_data=extracted_data,
-            flagged_for_review=flagged,
-            review_reason=review_reason,
-        )
-
-        logger.info(
-            "analyzer.result",
-            image=original_filename,
-            entity_type=classification.primary_type.value,
-            confidence=classification.confidence,
-            flagged=flagged,
-        )
-
-        return result
+        return results
 
     def _call_gemini(self, image_bytes: bytes):
         """Make the actual API call to Gemini. Separated for retry handling."""
@@ -157,20 +146,20 @@ class GeminiAnalyzer:
         )
         return response
 
-    def _parse_response(
+    def _parse_multi_entity_response(
         self, response_text: str, image_path: str
-    ) -> tuple[ClassificationResult, ExtractedData | None]:
-        """Parse the JSON response from Gemini.
+    ) -> list[ImageAnalysisResult]:
+        """Parse the multi-entity JSON response from Gemini.
 
-        Attempts to parse the JSON directly. If parsing fails, sends the
-        broken JSON back to Gemini with JSON_FIX_PROMPT for correction.
+        Handles both new multi-entity format ({"entities": [...]}) and
+        legacy single-entity format ({"classification": ..., "extracted_data": ...}).
 
         Args:
             response_text: Raw text response from Gemini.
             image_path: Image path for error context.
 
         Returns:
-            Tuple of (ClassificationResult, extracted data or None).
+            List of ImageAnalysisResult, one per entity found.
         """
         original_filename = Path(image_path).name
 
@@ -178,7 +167,6 @@ class GeminiAnalyzer:
         parsed = self._try_parse_json(response_text)
 
         if parsed is None:
-            # Attempt to fix the JSON via a follow-up Gemini call
             logger.warning(
                 "analyzer.invalid_json",
                 image=original_filename,
@@ -187,22 +175,96 @@ class GeminiAnalyzer:
             parsed = self._attempt_json_fix(response_text)
 
         if parsed is None:
-            logger.error(
-                "analyzer.json_parse_failed",
-                image=original_filename,
-            )
-            return (
-                ClassificationResult(
+            logger.error("analyzer.json_parse_failed", image=original_filename)
+            return [ImageAnalysisResult(
+                image_path=image_path,
+                original_filename=original_filename,
+                file_hash_sha256="",
+                classification=ClassificationResult(
                     primary_type=EntityType.UNCLASSIFIED,
                     confidence=0.0,
                     reasoning="Failed to parse Gemini response as JSON",
                 ),
-                None,
+                flagged_for_review=True,
+                review_reason="JSON parse failure",
+            )]
+
+        # Determine format: multi-entity or legacy single-entity
+        if "entities" in parsed and isinstance(parsed["entities"], list):
+            entity_dicts = parsed["entities"]
+        elif "classification" in parsed:
+            # Legacy single-entity format — wrap in list
+            entity_dicts = [parsed]
+        else:
+            logger.error("analyzer.unknown_response_format", image=original_filename)
+            return [ImageAnalysisResult(
+                image_path=image_path,
+                original_filename=original_filename,
+                file_hash_sha256="",
+                classification=ClassificationResult(
+                    primary_type=EntityType.UNCLASSIFIED,
+                    confidence=0.0,
+                    reasoning="Unknown response format from Gemini",
+                ),
+                flagged_for_review=True,
+                review_reason="Unknown response format",
+            )]
+
+        results: list[ImageAnalysisResult] = []
+
+        for entity_dict in entity_dicts:
+            classification, extracted_data = self._parse_single_entity(
+                entity_dict, original_filename
             )
 
+            # Flag low confidence for review
+            flagged = classification.confidence < 0.5
+            review_reason = None
+            if flagged:
+                review_reason = f"Low confidence: {classification.confidence:.2f}"
+
+            related_to = entity_dict.get("related_to")
+
+            results.append(ImageAnalysisResult(
+                image_path=image_path,
+                original_filename=original_filename,
+                file_hash_sha256="",
+                classification=classification,
+                extracted_data=extracted_data,
+                flagged_for_review=flagged,
+                review_reason=review_reason,
+                related_to=related_to,
+            ))
+
+        if not results:
+            results.append(ImageAnalysisResult(
+                image_path=image_path,
+                original_filename=original_filename,
+                file_hash_sha256="",
+                classification=ClassificationResult(
+                    primary_type=EntityType.UNCLASSIFIED,
+                    confidence=0.0,
+                    reasoning="Empty entities array from Gemini",
+                ),
+                flagged_for_review=True,
+                review_reason="No entities detected",
+            ))
+
+        logger.info(
+            "analyzer.entities_found",
+            image=original_filename,
+            count=len(results),
+        )
+
+        return results
+
+    def _parse_single_entity(
+        self, entity_dict: dict, original_filename: str
+    ) -> tuple[ClassificationResult, ExtractedData | None]:
+        """Parse a single entity dict into classification + extracted data."""
         # Extract classification
         try:
-            classification_data = parsed.get("classification", {})
+            classification_data = entity_dict.get("classification", {})
             classification = ClassificationResult(**classification_data)
         except (ValidationError, TypeError) as exc:
             logger.error(
@@ -221,7 +283,7 @@ class GeminiAnalyzer:
 
         # Extract entity-specific data
         extracted_data = None
-        raw_data = parsed.get("extracted_data")
+        raw_data = entity_dict.get("extracted_data")
 
         if raw_data is not None and classification.primary_type != EntityType.UNCLASSIFIED:
             model_class = _ENTITY_MODEL_MAP.get(classification.primary_type)
@@ -235,14 +297,6 @@ class GeminiAnalyzer:
                         entity_type=classification.primary_type.value,
                         error=str(exc),
                     )
-                    # Keep the classification but flag for review
-                    classification = ClassificationResult(
-                        primary_type=classification.primary_type,
-                        confidence=classification.confidence,
-                        secondary_type=classification.secondary_type,
-                        reasoning=classification.reasoning,
-                    )
-                    # Return with no extracted_data -- will be flagged
                     return classification, None
 
         return classification, extracted_data

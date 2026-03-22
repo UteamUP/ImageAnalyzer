@@ -1,6 +1,6 @@
 gemini:
-  # Model name (gemini-2.5-flash is cost-effective, gemini-2.5-pro for higher accuracy)
-  model: "gemini-2.5-flash"
+  # Model name (gemini-3.1-flash-lite-preview is cost-effective, gemini-2.5-pro for higher accuracy)
+  model: "gemini-3.1-flash-lite-preview"
   max_output_tokens: 4096
   temperature: 0.1
   requests_per_minute: 15
@@ -10,7 +10,8 @@ gemini:
 scan:
   # Default paths relative to project root
   image_folder: "./Images/Original"
-  output_folder: "./Images/Updated"
+  output_folder: "./Output"
+  renamed_images_folder: "./Images/Updated"
   recursive: true
   supported_formats:
     - ".jpg"

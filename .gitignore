@@ -20,7 +20,10 @@ build/
 .checkpoint.json.tmp
 .checkpoint.lock
 
-# Output (renamed images go here)
+# Output (CSVs, reports)
+Output/
+
+# Images (originals and renamed)
 Images/Updated/
 Images/Original/
 

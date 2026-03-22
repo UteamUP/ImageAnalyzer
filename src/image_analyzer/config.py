@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 @dataclass
 class GeminiConfig:
     api_key: str = ""
-    model: str = "gemini-2.5-flash"
+    model: str = "gemini-3.1-flash"
     max_output_tokens: int = 4096
     temperature: float = 0.1
     requests_per_minute: int = 15
@@ -23,7 +23,8 @@ class GeminiConfig:
 @dataclass
 class ScanConfig:
     image_folder: str = "./Images/Original"
-    output_folder: str = "./Images/Updated"
+    output_folder: str = "./Output"
+    renamed_images_folder: str = "./Images/Updated"
     recursive: bool = True
     supported_formats: list[str] = field(
         default_factory=lambda: [".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".tiff", ".bmp"]
@@ -62,6 +63,9 @@ class AppConfig:
         output_folder = Path(self.scan.output_folder).resolve()
         output_folder.mkdir(parents=True, exist_ok=True)
 
+        renamed_folder = Path(self.scan.renamed_images_folder).resolve()
+        renamed_folder.mkdir(parents=True, exist_ok=True)
+
         if self.gemini.temperature < 0 or self.gemini.temperature > 2:
             errors.append(f"Temperature must be 0-2, got {self.gemini.temperature}")
 
@@ -97,7 +101,7 @@ def load_config(
     # Build GeminiConfig — env vars override YAML
     gemini = GeminiConfig(
         api_key=os.environ.get("GEMINI_API_KEY", gemini_data.get("api_key", "")),
-        model=os.environ.get("GEMINI_MODEL", gemini_data.get("model", "gemini-2.5-flash")),
+        model=os.environ.get("GEMINI_MODEL", gemini_data.get("model", "gemini-3.1-flash")),
         max_output_tokens=int(
             os.environ.get("GEMINI_MAX_OUTPUT_TOKENS", gemini_data.get("max_output_tokens", 4096))
         ),
@@ -119,7 +123,10 @@ def load_config(
         ).resolve()),
         output_folder=str(Path(
             output_override
-            or os.environ.get("OUTPUT_FOLDER", scan_data.get("output_folder", "./Images/Updated"))
+            or os.environ.get("OUTPUT_FOLDER", scan_data.get("output_folder", "./Output"))
+        ).resolve()),
+        renamed_images_folder=str(Path(
+            os.environ.get("RENAMED_IMAGES_FOLDER", scan_data.get("renamed_images_folder", "./Images/Updated"))
         ).resolve()),
         recursive=scan_data.get("recursive", True),
         supported_formats=scan_data.get(

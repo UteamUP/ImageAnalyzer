@@ -81,10 +81,14 @@ class Pipeline:
 
         results: list[ImageAnalysisResult] = []
 
-        # Restore previously processed results
-        for result_dict in checkpoint.get_results():
+        # Restore previously processed results (handles both list and single formats)
+        for result_data in checkpoint.get_results():
             try:
-                results.append(ImageAnalysisResult.model_validate(result_dict))
+                if isinstance(result_data, list):
+                    for rd in result_data:
+                        results.append(ImageAnalysisResult.model_validate(rd))
+                else:
+                    results.append(ImageAnalysisResult.model_validate(result_data))
             except Exception:
                 pass  # Skip corrupted checkpoint entries
 
@@ -119,24 +123,27 @@ class Pipeline:
                         image_info.path,
                         max_dimension=self.config.scan.max_image_dimension,
                     )
-                    result = analyzer.analyze_image(image_info.path, image_bytes)
+                    image_results = analyzer.analyze_image(image_info.path, image_bytes)
 
-                    # Attach iPhone edit pair paths
-                    if image_info.filename in edit_pairs:
-                        result.paired_images = edit_pairs[image_info.filename]
+                    for result in image_results:
+                        # Attach iPhone edit pair paths
+                        if image_info.filename in edit_pairs:
+                            result.paired_images = edit_pairs[image_info.filename]
 
-                    # Apply confidence threshold
-                    if result.classification.confidence < self.config.processing.confidence_threshold:
-                        result.classification.primary_type = EntityType.UNCLASSIFIED
-                        result.flagged_for_review = True
-                        result.review_reason = (
-                            f"Low confidence: {result.classification.confidence:.2f}"
-                        )
+                        # Apply confidence threshold
+                        if result.classification.confidence < self.config.processing.confidence_threshold:
+                            result.classification.primary_type = EntityType.UNCLASSIFIED
+                            result.flagged_for_review = True
+                            result.review_reason = (
+                                f"Low confidence: {result.classification.confidence:.2f}"
+                            )
 
-                    results.append(result)
+                        results.append(result)
+
+                    # Checkpoint stores all results for this image
                     checkpoint.add_result(
                         image_info.sha256_hash,
-                        result.model_dump(mode="json"),
+                        [r.model_dump(mode="json") for r in image_results],
                     )
                 except Exception as e:
                     logger.error("Failed to analyze image", path=image_info.path, error=str(e))
@@ -189,6 +196,7 @@ class Pipeline:
 
         exporter = CSVExporter(
             output_folder=self.config.scan.output_folder,
+            renamed_images_folder=self.config.scan.renamed_images_folder,
             rename_images=self.config.processing.rename_images,
             rename_pattern=self.config.processing.rename_pattern,
         )
