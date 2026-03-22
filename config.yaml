@@ -1,0 +1,33 @@
+gemini:
+  # Model name (gemini-2.0-flash is cost-effective, gemini-2.5-pro for higher accuracy)
+  model: "gemini-2.0-flash"
+  max_output_tokens: 4096
+  temperature: 0.1
+  requests_per_minute: 15
+  max_retries: 3
+  timeout_seconds: 60
+
+scan:
+  # Default paths relative to project root
+  image_folder: "./Images/Original"
+  output_folder: "./Images/Updated"
+  recursive: true
+  supported_formats:
+    - ".jpg"
+    - ".jpeg"
+    - ".png"
+    - ".webp"
+    - ".heic"
+    - ".heif"
+    - ".tiff"
+    - ".bmp"
+  max_image_dimension: 2048
+  max_file_size_mb: 20
+
+processing:
+  dry_run: false
+  rename_images: true
+  rename_pattern: "{entity_type}_{name}_{seq}_{date}.{ext}"
+  grouping_similarity_threshold: 0.75
+  confidence_threshold: 0.5
+  checkpoint_file: ".checkpoint.json"

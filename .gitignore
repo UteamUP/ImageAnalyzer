@@ -1,0 +1,45 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Environment
+.env
+
+# Processing state
+.checkpoint.json
+.checkpoint.json.tmp
+.checkpoint.lock
+
+# Output (renamed images go here)
+Images/Updated/
+Images/Original/
+
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Session logs
+SESSION_LOG_*.md
+
+# Test/coverage
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
