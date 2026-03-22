@@ -13,12 +13,15 @@ logger = structlog.get_logger(__name__)
 class ImageGrouper:
     """Group analysed images that depict the same physical item.
 
-    The algorithm proceeds in five stages:
+    The algorithm proceeds in six stages:
     1. Partition results by ``entity_type`` (unclassified items are never grouped).
     2. Pre-merge iPhone ``IMG_E*`` edit pairs (using the ``paired_images`` field).
     3. Exact-match on ``serial_number`` (strongest signal).
+    3b. Exact-match on ``name`` (case-insensitive, stripped) within the same
+        entity type — catches the same asset photographed from different angles.
     4. Pairwise similarity + agglomerative clustering for the remainder.
-    5. Select a representative (highest confidence) for every group.
+    5. Select a representative (highest confidence) for every group and merge
+       extracted data fields from members into the representative.
     """
 
     def __init__(self, similarity_threshold: float = 0.75) -> None:
@@ -73,16 +76,20 @@ class ImageGrouper:
         # Step 3 — exact serial_number match
         serial_groups, remaining = self._group_by_serial(merged)
 
+        # Step 3b — exact name match (case-insensitive, stripped)
+        name_groups, remaining = self._group_by_name(remaining)
+
         # Step 4 — agglomerative clustering on remaining
         clustered = self._agglomerative_cluster(remaining)
 
-        all_groups = serial_groups + clustered
+        all_groups = serial_groups + name_groups + clustered
 
         # Step 5 — select representative for each group
         final: list[ImageGroup] = []
         for cluster in all_groups:
             rep = self._select_representative(cluster)
             members = [r for r in cluster if r is not rep]
+            self._merge_extracted_data(rep, members)
             final.append(
                 ImageGroup(
                     primary=rep,
@@ -133,6 +140,68 @@ class ImageGrouper:
         groups = [v for v in serial_map.values()]
         return groups, no_serial
 
+    def _group_by_name(
+        self, items: list[ImageAnalysisResult]
+    ) -> tuple[list[list[ImageAnalysisResult]], list[ImageAnalysisResult]]:
+        """Group items that share the exact same name (case-insensitive, stripped)."""
+        name_map: dict[str, list[ImageAnalysisResult]] = {}
+        no_name: list[ImageAnalysisResult] = []
+
+        for r in items:
+            name = self._get_name(r)
+            if name:
+                key = name.strip().lower()
+                if key:
+                    name_map.setdefault(key, []).append(r)
+                else:
+                    no_name.append(r)
+            else:
+                no_name.append(r)
+
+        groups: list[list[ImageAnalysisResult]] = []
+        ungrouped: list[ImageAnalysisResult] = list(no_name)
+        for members in name_map.values():
+            if len(members) > 1:
+                groups.append(members)
+            else:
+                ungrouped.append(members[0])
+
+        return groups, ungrouped
+
+    @staticmethod
+    def _merge_extracted_data(
+        representative: ImageAnalysisResult,
+        members: list[ImageAnalysisResult],
+    ) -> None:
+        """Fill in null fields on the representative from member data.
+
+        Members are considered in descending confidence order so that
+        higher-confidence members' data is preferred.
+        """
+        if not representative.extracted_data or not members:
+            return
+
+        sorted_members = sorted(
+            members,
+            key=lambda r: r.classification.confidence,
+            reverse=True,
+        )
+
+        for member in sorted_members:
+            if not member.extracted_data:
+                continue
+            for field in vars(representative.extracted_data):
+                if field.startswith("_"):
+                    continue
+                current = getattr(representative.extracted_data, field, None)
+                if current is None:
+                    donor_value = getattr(member.extracted_data, field, None)
+                    if donor_value is not None:
+                        try:
+                            setattr(representative.extracted_data, field, donor_value)
+                        except (AttributeError, TypeError):
+                            pass
+
     def _agglomerative_cluster(
         self, items: list[ImageAnalysisResult]
     ) -> list[list[ImageAnalysisResult]]:
@@ -178,11 +247,12 @@ class ImageGrouper:
         """Weighted multi-signal similarity between two analysis results.
 
         Weights:
-            serial_number exact match   0.40
-            model_number exact match    0.20
-            name fuzzy match            0.20
-            perceptual hash similarity  0.15
-            manufacturer_brand match    0.05
+            serial_number exact match       0.40
+            model_number exact match        0.20
+            name fuzzy match                0.20
+            description fuzzy match         0.10
+            perceptual hash similarity      0.05
+            manufacturer_brand match        0.05
         """
         # Different entity types -> zero similarity
         if a.classification.primary_type != b.classification.primary_type:
@@ -209,10 +279,17 @@ class ImageGrouper:
             ratio = fuzz.ratio(name_a.lower(), name_b.lower()) / 100.0
             score += 0.20 * ratio
 
-        # --- perceptual hash similarity (0.15) ---
+        # --- description fuzzy match (0.10) ---
+        desc_a = self._get_description(a)
+        desc_b = self._get_description(b)
+        if desc_a and desc_b:
+            ratio = fuzz.ratio(desc_a.lower(), desc_b.lower()) / 100.0
+            score += 0.10 * ratio
+
+        # --- perceptual hash similarity (0.05) ---
         if a.perceptual_hash and b.perceptual_hash:
             phash_sim = self._phash_similarity(a.perceptual_hash, b.perceptual_hash)
-            score += 0.15 * phash_sim
+            score += 0.05 * phash_sim
 
         # --- manufacturer_brand (0.05) ---
         brand_a = self._get_brand(a)
@@ -248,6 +325,12 @@ class ImageGrouper:
     def _get_name(r: ImageAnalysisResult) -> str | None:
         if r.extracted_data and hasattr(r.extracted_data, "name"):
             return r.extracted_data.name
+        return None
+
+    @staticmethod
+    def _get_description(r: ImageAnalysisResult) -> str | None:
+        if r.extracted_data and hasattr(r.extracted_data, "description"):
+            return r.extracted_data.description
         return None
 
     @staticmethod
