@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 @dataclass
 class GeminiConfig:
     api_key: str = ""
-    model: str = "gemini-2.0-flash"
+    model: str = "gemini-2.5-flash"
     max_output_tokens: int = 4096
     temperature: float = 0.1
     requests_per_minute: int = 15
@@ -97,7 +97,7 @@ def load_config(
     # Build GeminiConfig — env vars override YAML
     gemini = GeminiConfig(
         api_key=os.environ.get("GEMINI_API_KEY", gemini_data.get("api_key", "")),
-        model=os.environ.get("GEMINI_MODEL", gemini_data.get("model", "gemini-2.0-flash")),
+        model=os.environ.get("GEMINI_MODEL", gemini_data.get("model", "gemini-2.5-flash")),
         max_output_tokens=int(
             os.environ.get("GEMINI_MAX_OUTPUT_TOKENS", gemini_data.get("max_output_tokens", 4096))
         ),

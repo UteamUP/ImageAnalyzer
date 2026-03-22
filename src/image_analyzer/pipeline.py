@@ -93,7 +93,7 @@ class Pipeline:
                 images_to_analyze,
                 desc="Analyzing",
                 unit="img",
-                disable=not logger.isEnabledFor("INFO"),
+                disable=False,
             )
             for image_info in progress:
                 progress.set_postfix_str(image_info.filename[:30])
@@ -104,11 +104,12 @@ class Pipeline:
 
                 # Check budget
                 if self.config.processing.max_cost is not None:
-                    estimated = analyzer.estimate_cost(1)
-                    if analyzer.total_cost + estimated["total_cost"] > self.config.processing.max_cost:
+                    next_cost = GeminiAnalyzer.estimate_cost(1)["estimated_total_cost_usd"]
+                    spent = analyzer.total_cost["total_cost_usd"]
+                    if spent + next_cost > self.config.processing.max_cost:
                         logger.warning(
                             "Budget limit reached",
-                            spent=f"${analyzer.total_cost:.4f}",
+                            spent=f"${spent:.4f}",
                             limit=f"${self.config.processing.max_cost:.2f}",
                         )
                         break
@@ -213,18 +214,18 @@ class Pipeline:
         """Print cost estimate without making API calls."""
         from image_analyzer.analyzer import GeminiAnalyzer
 
-        analyzer = GeminiAnalyzer.__new__(GeminiAnalyzer)
-        estimate = GeminiAnalyzer.estimate_cost(analyzer, len(images))
+        estimate = GeminiAnalyzer.estimate_cost(len(images))
+        est_minutes = len(images) / max(self.config.gemini.requests_per_minute, 1)
 
         print("\n=== DRY RUN — Cost Estimate ===")
         print(f"Images to analyze:  {len(images)}")
         print(f"Duplicates skipped: {duplicates_found}")
         print(f"iPhone edit pairs:  {len(edit_pairs)} (variants skipped)")
         print(f"Model:              {self.config.gemini.model}")
-        print(f"Est. input tokens:  {estimate['input_tokens']:,}")
-        print(f"Est. output tokens: {estimate['output_tokens']:,}")
-        print(f"Est. total cost:    ${estimate['total_cost']:.4f}")
-        print(f"Est. time:          {estimate['estimated_minutes']:.1f} minutes")
+        print(f"Est. input tokens:  {estimate['estimated_input_tokens']:,}")
+        print(f"Est. output tokens: {estimate['estimated_output_tokens']:,}")
+        print(f"Est. total cost:    ${estimate['estimated_total_cost_usd']:.4f}")
+        print(f"Est. time:          {est_minutes:.1f} minutes")
         print(f"                    (at {self.config.gemini.requests_per_minute} req/min)")
         if self.config.processing.max_cost:
             print(f"Budget cap:         ${self.config.processing.max_cost:.2f}")

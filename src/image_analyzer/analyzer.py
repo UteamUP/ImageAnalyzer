@@ -281,7 +281,8 @@ class GeminiAnalyzer:
             logger.error("analyzer.json_fix_failed", error=str(exc))
             return None
 
-    def _estimate_cost(self, image_count: int) -> dict:
+    @staticmethod
+    def estimate_cost(image_count: int) -> dict:
         """Estimate cost for processing a batch of images.
 
         Based on Gemini 2.0 Flash pricing:

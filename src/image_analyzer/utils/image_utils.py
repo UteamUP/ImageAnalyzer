@@ -10,6 +10,15 @@ from PIL import Image
 
 logger = structlog.get_logger(__name__)
 
+# Register HEIC/HEIF support globally so Pillow can open these formats
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+    _HEIF_AVAILABLE = True
+except ImportError:
+    _HEIF_AVAILABLE = False
+    logger.debug("pillow_heif_not_available", msg="HEIC/HEIF files will be skipped")
+
 
 def resize_image(image_bytes: bytes, max_dimension: int) -> bytes:
     """Resize image if it exceeds max_dimension, preserving aspect ratio.
@@ -40,21 +49,13 @@ def resize_image(image_bytes: bytes, max_dimension: int) -> bytes:
 def convert_heic_to_jpeg(file_path: str) -> bytes:
     """Convert a HEIC/HEIF file to JPEG bytes.
 
-    Uses pillow-heif if available. If the library is missing, logs a
-    warning and raises ``ImportError`` so callers can decide how to
-    proceed.
+    Requires pillow-heif (registered at module import time).
     """
-    try:
-        import pillow_heif  # noqa: F811
-
-        pillow_heif.register_heif_opener()
-    except ImportError:
-        warnings.warn(
+    if not _HEIF_AVAILABLE:
+        raise ImportError(
             "pillow-heif is not installed — HEIC/HEIF images cannot be converted. "
-            "Install with: pip install pillow-heif",
-            stacklevel=2,
+            "Install with: pip install pillow-heif"
         )
-        raise
 
     img = Image.open(file_path)
     img = img.convert("RGB")
@@ -66,13 +67,27 @@ def convert_heic_to_jpeg(file_path: str) -> bytes:
 
 def is_valid_image(file_path: str) -> bool:
     """Verify that ``file_path`` is a readable, non-corrupted image."""
+    ext = Path(file_path).suffix.lower()
+
+    # For HEIC/HEIF, check if pillow-heif is available
+    if ext in (".heic", ".heif") and not _HEIF_AVAILABLE:
+        logger.warning("heic_no_library", file_path=file_path)
+        return False
+
     try:
         with Image.open(file_path) as img:
             img.verify()
         return True
     except Exception:
-        logger.warning("invalid_image", file_path=file_path)
-        return False
+        # Some formats (including HEIC) may fail verify() but still be loadable.
+        # Try actually loading the image as a fallback.
+        try:
+            with Image.open(file_path) as img:
+                img.load()
+            return True
+        except Exception:
+            logger.warning("invalid_image", file_path=file_path)
+            return False
 
 
 def sanitize_filename(name: str) -> str:
@@ -82,16 +97,29 @@ def sanitize_filename(name: str) -> str:
     - Spaces replaced with underscores
     - All other special / unicode characters stripped
     """
-    name = name.lower()
-    name = name.replace(" ", "_")
-    # Keep only alphanumeric, underscore, dash, and dot (for extensions)
-    name = re.sub(r"[^a-z0-9_\-.]", "", name)
+    name = name.lower().strip()
+    # Separate stem from extension so we can clean each independently
+    dot_idx = name.rfind(".")
+    if dot_idx > 0:
+        stem = name[:dot_idx]
+        ext = name[dot_idx:]  # includes the dot
+    else:
+        stem = name
+        ext = ""
+
+    stem = stem.replace(" ", "_")
+    # Keep only alphanumeric, underscore, and dash
+    stem = re.sub(r"[^a-z0-9_\-]", "", stem)
     # Collapse multiple underscores / dashes
-    name = re.sub(r"[_]{2,}", "_", name)
-    name = re.sub(r"[-]{2,}", "-", name)
-    # Strip leading/trailing underscores and dashes
-    name = name.strip("_-")
-    return name
+    stem = re.sub(r"[_]{2,}", "_", stem)
+    stem = re.sub(r"[-]{2,}", "-", stem)
+    # Strip leading/trailing underscores and dashes from the stem
+    stem = stem.strip("_-")
+
+    # Clean the extension (keep only alphanumeric + dot)
+    ext = re.sub(r"[^a-z0-9.]", "", ext)
+
+    return stem + ext
 
 
 def load_image_bytes(file_path: str, max_dimension: int = 2048) -> bytes:
